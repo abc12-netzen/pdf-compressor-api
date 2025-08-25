@@ -29,46 +29,59 @@ const upload = multer({
 
 // Compression presets
 const COMPRESSION_PRESETS = {
-  50: { quality: "screen", dpi: 36, imageQuality: 8, colorConversion: "Gray", downsample: true, ultraAggressive: true }, // Ultra Aggressive (50KB target)
-  75: {
+  50: {
     quality: "screen",
-    dpi: 42,
-    imageQuality: 12,
+    dpi: 24,
+    imageQuality: 5,
     colorConversion: "Gray",
     downsample: true,
     ultraAggressive: true,
+    extremeMode: true,
+  }, // Ultra Aggressive (50KB target)
+  75: {
+    quality: "screen",
+    dpi: 30,
+    imageQuality: 8,
+    colorConversion: "Gray",
+    downsample: true,
+    ultraAggressive: true,
+    extremeMode: true,
   }, // Super Aggressive (75KB target)
   100: {
+    quality: "screen",
+    dpi: 36,
+    imageQuality: 10,
+    colorConversion: "RGB",
+    downsample: true,
+    ultraAggressive: true,
+    extremeMode: true,
+  }, // Aggressive (100KB target)
+  150: {
     quality: "screen",
     dpi: 48,
     imageQuality: 15,
     colorConversion: "RGB",
     downsample: true,
     ultraAggressive: true,
-  }, // Aggressive (100KB target)
-  150: {
-    quality: "screen",
-    dpi: 60,
-    imageQuality: 20,
-    colorConversion: "RGB",
-    downsample: true,
-    ultraAggressive: false,
+    extremeMode: false,
   }, // 150KB target
   180: {
     quality: "screen",
-    dpi: 72,
-    imageQuality: 25,
+    dpi: 60,
+    imageQuality: 18,
     colorConversion: "RGB",
     downsample: true,
     ultraAggressive: false,
+    extremeMode: false,
   }, // 180KB target
   400: {
     quality: "ebook",
-    dpi: 96,
-    imageQuality: 35,
+    dpi: 72,
+    imageQuality: 25,
     colorConversion: "RGB",
     downsample: false,
     ultraAggressive: false,
+    extremeMode: false,
   }, // 400KB target
   custom: {
     quality: "default",
@@ -77,6 +90,7 @@ const COMPRESSION_PRESETS = {
     colorConversion: "RGB",
     downsample: false,
     ultraAggressive: false,
+    extremeMode: false,
   }, // Custom target
 }
 
@@ -85,16 +99,16 @@ function compressPDF(inputPath, outputPath, targetSize, callback) {
 
   let gsCommand = `gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/${preset.quality} -dNOPAUSE -dQUIET -dBATCH`
 
-  // Ultra-low resolution for maximum compression
   gsCommand += ` -dColorImageResolution=${preset.dpi} -dGrayImageResolution=${preset.dpi} -dMonoImageResolution=${preset.dpi}`
 
   if (preset.downsample) {
     gsCommand += ` -dDownsampleColorImages=true -dDownsampleGrayImages=true -dDownsampleMonoImages=true`
-    gsCommand += ` -dColorImageDownsampleType=/Subsample -dGrayImageDownsampleType=/Subsample -dMonoImageDownsampleType=/Subsample`
+    gsCommand += ` -dColorImageDownsampleType=/Bicubic -dGrayImageDownsampleType=/Bicubic -dMonoImageDownsampleType=/Bicubic`
   }
 
   gsCommand += ` -dJPEGQ=${preset.imageQuality} -dAutoFilterColorImages=false -dAutoFilterGrayImages=false`
   gsCommand += ` -dColorImageFilter=/DCTEncode -dGrayImageFilter=/DCTEncode`
+  gsCommand += ` -dEncodeColorImages=true -dEncodeGrayImages=true -dEncodeMonoImages=true`
 
   gsCommand += ` -dDetectDuplicateImages=true -dCompressFonts=true -dSubsetFonts=true`
   gsCommand += ` -dEmbedAllFonts=false -dOptimize=true -dUseFlateCompression=true`
@@ -103,38 +117,23 @@ function compressPDF(inputPath, outputPath, targetSize, callback) {
   if (preset.ultraAggressive) {
     gsCommand += ` -dConvertCMYKImagesToRGB=true -dConvertImagesToIndexed=true`
     gsCommand += ` -dColorImageDownsampleThreshold=1.0 -dGrayImageDownsampleThreshold=1.0`
-    gsCommand += ` -dMonoImageDownsampleThreshold=1.0 -dImageMemory=524288`
+    gsCommand += ` -dMonoImageDownsampleThreshold=1.0 -dImageMemory=262144`
     gsCommand += ` -dMaxSubsetPct=100 -dSubsetFonts=true -dCompressPages=true`
     gsCommand += ` -dPreserveEPSInfo=false -dPreserveOPIComments=false -dPreserveHalftoneInfo=false`
+    gsCommand += ` -dRemoveUnusedObjects=true -dCompressStreams=true -dASCII85EncodePages=false`
 
-    // Convert to grayscale for ultra-small targets
-    if (targetSize <= 75) {
+    if (targetSize <= 100) {
       gsCommand += ` -sColorConversionStrategy=Gray -dProcessColorModel=/DeviceGray`
+      gsCommand += ` -dGrayImageDict="{/QFactor 2.0 /Blend 1 /HSamples [2 1 1 2] /VSamples [2 1 1 2]}"` + "}"
     }
   }
 
-  gsCommand += ` -dFastWebView=true -dPrinted=false -dCannotEmbedFontPolicy=/Warning`
-
-  gsCommand += ` -sOutputFile="${outputPath}" "${inputPath}"`
-
-  console.log(`[API] Ultra-aggressive compression for ${targetSize}KB target`)
-  console.log(`[API] Command: ${gsCommand}`)
-
   exec(gsCommand, (error, stdout, stderr) => {
     if (error) {
-      console.error(`[API] Ghostscript error: ${error.message}`)
-      return callback(error)
+      callback(error)
+      return
     }
-
-    if (stderr) {
-      console.log(`[API] Ghostscript stderr: ${stderr}`)
-    }
-
-    if (!fs.existsSync(outputPath)) {
-      return callback(new Error("Compression failed - output file not created"))
-    }
-
-    callback(null)
+    callback(null, outputPath)
   })
 }
 
