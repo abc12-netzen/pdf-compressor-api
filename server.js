@@ -29,46 +29,92 @@ const upload = multer({
 
 // Compression presets
 const COMPRESSION_PRESETS = {
-  50: { quality: "screen", dpi: 50, imageQuality: 15, colorConversion: "RGB", downsample: true }, // Ultra Aggressive (50KB target)
-  75: { quality: "screen", dpi: 60, imageQuality: 20, colorConversion: "RGB", downsample: true }, // Super Aggressive (75KB target)
-  100: { quality: "screen", dpi: 72, imageQuality: 25, colorConversion: "RGB", downsample: true }, // Aggressive (100KB target)
-  150: { quality: "screen", dpi: 96, imageQuality: 35, colorConversion: "RGB", downsample: true }, // 150KB target
-  180: { quality: "ebook", dpi: 120, imageQuality: 45, colorConversion: "RGB", downsample: true }, // 180KB target
-  400: { quality: "printer", dpi: 150, imageQuality: 55, colorConversion: "RGB", downsample: false }, // 400KB target
-  custom: { quality: "default", dpi: 150, imageQuality: 50, colorConversion: "RGB", downsample: false }, // Custom target
+  50: { quality: "screen", dpi: 36, imageQuality: 8, colorConversion: "Gray", downsample: true, ultraAggressive: true }, // Ultra Aggressive (50KB target)
+  75: {
+    quality: "screen",
+    dpi: 42,
+    imageQuality: 12,
+    colorConversion: "Gray",
+    downsample: true,
+    ultraAggressive: true,
+  }, // Super Aggressive (75KB target)
+  100: {
+    quality: "screen",
+    dpi: 48,
+    imageQuality: 15,
+    colorConversion: "RGB",
+    downsample: true,
+    ultraAggressive: true,
+  }, // Aggressive (100KB target)
+  150: {
+    quality: "screen",
+    dpi: 60,
+    imageQuality: 20,
+    colorConversion: "RGB",
+    downsample: true,
+    ultraAggressive: false,
+  }, // 150KB target
+  180: {
+    quality: "screen",
+    dpi: 72,
+    imageQuality: 25,
+    colorConversion: "RGB",
+    downsample: true,
+    ultraAggressive: false,
+  }, // 180KB target
+  400: {
+    quality: "ebook",
+    dpi: 96,
+    imageQuality: 35,
+    colorConversion: "RGB",
+    downsample: false,
+    ultraAggressive: false,
+  }, // 400KB target
+  custom: {
+    quality: "default",
+    dpi: 150,
+    imageQuality: 50,
+    colorConversion: "RGB",
+    downsample: false,
+    ultraAggressive: false,
+  }, // Custom target
 }
 
 function compressPDF(inputPath, outputPath, targetSize, callback) {
   const preset = COMPRESSION_PRESETS[targetSize] || COMPRESSION_PRESETS["custom"]
 
-  // Build advanced Ghostscript command with aggressive compression
   let gsCommand = `gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/${preset.quality} -dNOPAUSE -dQUIET -dBATCH`
 
-  // Image resolution settings
+  // Ultra-low resolution for maximum compression
   gsCommand += ` -dColorImageResolution=${preset.dpi} -dGrayImageResolution=${preset.dpi} -dMonoImageResolution=${preset.dpi}`
 
-  // Downsampling settings for aggressive compression
   if (preset.downsample) {
     gsCommand += ` -dDownsampleColorImages=true -dDownsampleGrayImages=true -dDownsampleMonoImages=true`
-    gsCommand += ` -dColorImageDownsampleType=/Bicubic -dGrayImageDownsampleType=/Bicubic -dMonoImageDownsampleType=/Bicubic`
+    gsCommand += ` -dColorImageDownsampleType=/Subsample -dGrayImageDownsampleType=/Subsample -dMonoImageDownsampleType=/Subsample`
   }
 
-  // JPEG quality and compression
   gsCommand += ` -dJPEGQ=${preset.imageQuality} -dAutoFilterColorImages=false -dAutoFilterGrayImages=false`
   gsCommand += ` -dColorImageFilter=/DCTEncode -dGrayImageFilter=/DCTEncode`
 
-  // Ultra-aggressive settings for smallest file sizes
-  if (targetSize <= 100) {
-    gsCommand += ` -dDetectDuplicateImages=true -dCompressFonts=true -dSubsetFonts=true`
-    gsCommand += ` -dEmbedAllFonts=false -dOptimize=true -dUseFlateCompression=true`
-    gsCommand += ` -dColorConversionStrategy=/${preset.colorConversion} -dProcessColorModel=/DeviceRGB`
+  gsCommand += ` -dDetectDuplicateImages=true -dCompressFonts=true -dSubsetFonts=true`
+  gsCommand += ` -dEmbedAllFonts=false -dOptimize=true -dUseFlateCompression=true`
+  gsCommand += ` -dColorConversionStrategy=/${preset.colorConversion} -dProcessColorModel=/DeviceRGB`
+
+  if (preset.ultraAggressive) {
     gsCommand += ` -dConvertCMYKImagesToRGB=true -dConvertImagesToIndexed=true`
+    gsCommand += ` -dColorImageDownsampleThreshold=1.0 -dGrayImageDownsampleThreshold=1.0`
+    gsCommand += ` -dMonoImageDownsampleThreshold=1.0 -dImageMemory=524288`
+    gsCommand += ` -dMaxSubsetPct=100 -dSubsetFonts=true -dCompressPages=true`
+    gsCommand += ` -dPreserveEPSInfo=false -dPreserveOPIComments=false -dPreserveHalftoneInfo=false`
+
+    // Convert to grayscale for ultra-small targets
+    if (targetSize <= 75) {
+      gsCommand += ` -sColorConversionStrategy=Gray -dProcessColorModel=/DeviceGray`
+    }
   }
 
-  // Font optimization for all compression levels
-  gsCommand += ` -dCompressFonts=true -dSubsetFonts=true`
+  gsCommand += ` -dFastWebView=true -dPrinted=false -dCannotEmbedFontPolicy=/Warning`
 
-  // Final output
   gsCommand += ` -sOutputFile="${outputPath}" "${inputPath}"`
 
   console.log(`[API] Ultra-aggressive compression for ${targetSize}KB target`)
@@ -84,7 +130,6 @@ function compressPDF(inputPath, outputPath, targetSize, callback) {
       console.log(`[API] Ghostscript stderr: ${stderr}`)
     }
 
-    // Check if output file exists
     if (!fs.existsSync(outputPath)) {
       return callback(new Error("Compression failed - output file not created"))
     }
@@ -121,28 +166,29 @@ app.post("/compress", upload.single("pdf"), async (req, res) => {
     const originalStats = fs.statSync(inputPath)
     const originalSize = originalStats.size
 
-    // For ultra-aggressive compression (50KB, 75KB), try multiple passes
     const performIterativeCompression = async (currentInput, target) => {
-      const currentOutput = outputPath
-      const iteration = 1
-      const maxIterations = target <= 75 ? 3 : 1 // Multiple passes for ultra-small targets
+      const maxIterations = target <= 50 ? 4 : target <= 100 ? 3 : target <= 150 ? 2 : 1
+      let currentInputPath = currentInput
 
       for (let i = 0; i < maxIterations; i++) {
         const iterationOutput = i === maxIterations - 1 ? outputPath : `${inputPath}_temp_${i}.pdf`
 
         await new Promise((resolve, reject) => {
-          compressPDF(currentInput, iterationOutput, target, (error) => {
+          compressPDF(currentInputPath, iterationOutput, target, (error) => {
             if (error) return reject(error)
 
             // Update input for next iteration
             if (i < maxIterations - 1) {
-              currentInput = iterationOutput
+              currentInputPath = iterationOutput
             }
             resolve()
           })
         })
 
-        console.log(`[API] Compression iteration ${i + 1}/${maxIterations} complete`)
+        if (fs.existsSync(iterationOutput)) {
+          const iterationStats = fs.statSync(iterationOutput)
+          console.log(`[API] Iteration ${i + 1}/${maxIterations}: ${iterationStats.size} bytes`)
+        }
       }
     }
 
@@ -175,14 +221,13 @@ app.post("/compress", upload.single("pdf"), async (req, res) => {
     fs.unlink(outputPath, () => {})
 
     // Cleanup any temporary files
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
       const tempFile = `${inputPath}_temp_${i}.pdf`
       if (fs.existsSync(tempFile)) {
         fs.unlink(tempFile, () => {})
       }
     }
 
-    // Send response
     res.json({
       success: true,
       data: {
@@ -190,7 +235,13 @@ app.post("/compress", upload.single("pdf"), async (req, res) => {
         compressed_size: compressedSize,
         compression_ratio: Number.parseFloat(compressionRatio),
         file_data: compressedData.toString("base64"),
-        compression_method: compressionRatio > 60 ? "Ultra-Aggressive Ghostscript API" : "Aggressive Ghostscript API",
+        compression_method:
+          compressionRatio > 70
+            ? "Ultra-Aggressive Multi-Pass Ghostscript"
+            : compressionRatio > 50
+              ? "Aggressive Multi-Pass Ghostscript"
+              : "Standard Ghostscript Compression",
+        iterations_used: targetSize <= 50 ? 4 : targetSize <= 100 ? 3 : targetSize <= 150 ? 2 : 1,
       },
     })
   } catch (error) {
