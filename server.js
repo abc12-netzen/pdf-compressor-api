@@ -97,47 +97,141 @@ const COMPRESSION_PRESETS = {
 function compressPDF(inputPath, outputPath, targetSize, callback) {
   const preset = COMPRESSION_PRESETS[targetSize] || COMPRESSION_PRESETS["custom"]
 
-  let gsCommand = `gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/${preset.quality} -dNOPAUSE -dQUIET -dBATCH`
+  function performCompression(pass = 1) {
+    const tempOutput = pass === 1 ? outputPath : `${outputPath}_temp_${pass}`
+    const tempInput = pass === 1 ? inputPath : `${outputPath}_temp_${pass - 1}`
 
-  gsCommand += ` -dColorImageResolution=${preset.dpi} -dGrayImageResolution=${preset.dpi} -dMonoImageResolution=${preset.dpi}`
+    let gsCommand = `gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/${preset.quality} -dNOPAUSE -dQUIET -dBATCH`
 
-  if (preset.downsample) {
-    gsCommand += ` -dDownsampleColorImages=true -dDownsampleGrayImages=true -dDownsampleMonoImages=true`
-    gsCommand += ` -dColorImageDownsampleType=/Bicubic -dGrayImageDownsampleType=/Bicubic -dMonoImageDownsampleType=/Bicubic`
+    gsCommand += ` -dColorImageResolution=${preset.dpi} -dGrayImageResolution=${preset.dpi} -dMonoImageResolution=${preset.dpi}`
+
+    if (preset.downsample) {
+      gsCommand += ` -dDownsampleColorImages=true -dDownsampleGrayImages=true -dDownsampleMonoImages=true`
+      gsCommand += ` -dColorImageDownsampleType=/Bicubic -dGrayImageDownsampleType=/Bicubic -dMonoImageDownsampleType=/Bicubic`
+    }
+
+    gsCommand += ` -dJPEGQ=${preset.imageQuality} -dAutoFilterColorImages=false -dAutoFilterGrayImages=false`
+    gsCommand += ` -dColorImageFilter=/DCTEncode -dGrayImageFilter=/DCTEncode`
+    gsCommand += ` -dEncodeColorImages=true -dEncodeGrayImages=true -dEncodeMonoImages=true`
+
+    gsCommand += ` -dDetectDuplicateImages=true -dCompressFonts=true -dSubsetFonts=true`
+    gsCommand += ` -dEmbedAllFonts=false -dOptimize=true -dUseFlateCompression=true`
+    gsCommand += ` -dColorConversionStrategy=/${preset.colorConversion} -dProcessColorModel=/DeviceRGB`
+
+    if (preset.ultraAggressive) {
+      gsCommand += ` -dConvertCMYKImagesToRGB=true -dConvertImagesToIndexed=true`
+      gsCommand += ` -dColorImageDownsampleThreshold=1.0 -dGrayImageDownsampleThreshold=1.0`
+      gsCommand += ` -dMonoImageDownsampleThreshold=1.0 -dImageMemory=262144`
+      gsCommand += ` -dMaxSubsetPct=100 -dSubsetFonts=true -dCompressPages=true`
+      gsCommand += ` -dPreserveEPSInfo=false -dPreserveOPIComments=false -dPreserveHalftoneInfo=false`
+      gsCommand += ` -dRemoveUnusedObjects=true -dCompressStreams=true -dASCII85EncodePages=false`
+
+      if (targetSize <= 100) {
+        gsCommand += ` -sColorConversionStrategy=Gray -dProcessColorModel=/DeviceGray`
+        gsCommand += ` -dGrayImageDict="{/QFactor 2.0 /Blend 1 /HSamples [2 1 1 2] /VSamples [2 1 1 2]}"` + "}"
+      }
+    }
+
+    if (preset.extremeMode) {
+      gsCommand += ` -dDoThumbnails=false -dCreateJobTicket=false -dPreserveMarkedContent=false`
+      gsCommand += ` -dFastWebView=true -dPrinted=false -dCannotEmbedFontPolicy=/Warning`
+    }
+
+    gsCommand += ` -sOutputFile="${tempOutput}" "${tempInput}"`
+
+    exec(gsCommand, (error, stdout, stderr) => {
+      if (error) {
+        callback(error)
+        return
+      }
+
+      // Check file size and decide if more passes are needed
+      fs.stat(tempOutput, (err, stats) => {
+        if (err) {
+          callback(err)
+          return
+        }
+
+        const currentSize = stats.size
+        const targetBytes = targetSize * 1024
+        const maxPasses = targetSize <= 50 ? 6 : targetSize <= 100 ? 4 : 2
+
+        // Clean up temp files from previous passes
+        if (pass > 1) {
+          fs.unlink(tempInput, () => {})
+        }
+
+        if (currentSize > targetBytes && pass < maxPasses) {
+          // Need another pass with more aggressive settings
+          const newPreset = { ...preset }
+          newPreset.imageQuality = Math.max(5, preset.imageQuality - 2)
+          newPreset.dpi = Math.max(24, preset.dpi - 6)
+
+          setTimeout(() => performCompression(pass + 1), 100)
+        } else {
+          // Final result
+          if (pass > 1) {
+            fs.rename(tempOutput, outputPath, (renameErr) => {
+              if (renameErr) callback(renameErr)
+              else callback(null, outputPath)
+            })
+          } else {
+            callback(null, outputPath)
+          }
+        }
+      })
+    })
   }
 
-  gsCommand += ` -dJPEGQ=${preset.imageQuality} -dAutoFilterColorImages=false -dAutoFilterGrayImages=false`
-  gsCommand += ` -dColorImageFilter=/DCTEncode -dGrayImageFilter=/DCTEncode`
-  gsCommand += ` -dEncodeColorImages=true -dEncodeGrayImages=true -dEncodeMonoImages=true`
-
-  gsCommand += ` -dDetectDuplicateImages=true -dCompressFonts=true -dSubsetFonts=true`
-  gsCommand += ` -dEmbedAllFonts=false -dOptimize=true -dUseFlateCompression=true`
-  gsCommand += ` -dColorConversionStrategy=/${preset.colorConversion} -dProcessColorModel=/DeviceRGB`
-
-  if (preset.ultraAggressive) {
-    gsCommand += ` -dConvertCMYKImagesToRGB=true -dConvertImagesToIndexed=true`
-    gsCommand += ` -dColorImageDownsampleThreshold=1.0 -dGrayImageDownsampleThreshold=1.0`
-    gsCommand += ` -dMonoImageDownsampleThreshold=1.0 -dImageMemory=262144`
-    gsCommand += ` -dMaxSubsetPct=100 -dSubsetFonts=true -dCompressPages=true`
-    gsCommand += ` -dPreserveEPSInfo=false -dPreserveOPIComments=false -dPreserveHalftoneInfo=false`
-    gsCommand += ` -dRemoveUnusedObjects=true -dCompressStreams=true -dASCII85EncodePages=false`
-
-    if (targetSize <= 100) {
-      gsCommand += ` -sColorConversionStrategy=Gray -dProcessColorModel=/DeviceGray`
-      gsCommand += ` -dGrayImageDict="{/QFactor 2.0 /Blend 1 /HSamples [2 1 1 2] /VSamples [2 1 1 2]}"` + "}"
-    }
-  }
-
-  exec(gsCommand, (error, stdout, stderr) => {
-    if (error) {
-      callback(error)
-      return
-    }
-    callback(null, outputPath)
-  })
+  performCompression()
 }
 
-// Health check endpoint
+app.post("/compress", upload.single("pdf"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "No PDF file uploaded" })
+  }
+
+  const targetSize = Number.parseInt(req.body.targetSize) || 150
+  const inputPath = req.file.path
+  const outputPath = `${inputPath}_compressed.pdf`
+  const originalSize = req.file.size
+
+  console.log(`[API] Compressing PDF: ${originalSize} bytes -> ${targetSize}KB target`)
+
+  compressPDF(inputPath, outputPath, targetSize, (error, compressedPath) => {
+    if (error) {
+      console.error("[API] Compression failed:", error)
+      // Clean up files
+      fs.unlink(inputPath, () => {})
+      return res.status(500).json({ error: "Compression failed" })
+    }
+
+    fs.stat(compressedPath, (err, stats) => {
+      if (err) {
+        fs.unlink(inputPath, () => {})
+        fs.unlink(compressedPath, () => {})
+        return res.status(500).json({ error: "Failed to read compressed file" })
+      }
+
+      const compressedSize = stats.size
+      const compressionRatio = (((originalSize - compressedSize) / originalSize) * 100).toFixed(2)
+
+      console.log(`[API] Compression complete: ${originalSize} -> ${compressedSize} bytes (${compressionRatio}%)`)
+
+      // Send file and clean up
+      res.download(compressedPath, "compressed.pdf", (downloadErr) => {
+        // Clean up temporary files
+        fs.unlink(inputPath, () => {})
+        fs.unlink(compressedPath, () => {})
+
+        if (downloadErr) {
+          console.error("[API] Download failed:", downloadErr)
+        }
+      })
+    })
+  })
+})
+
 app.get("/health", (req, res) => {
   res.json({
     status: "OK",
@@ -146,138 +240,18 @@ app.get("/health", (req, res) => {
   })
 })
 
-app.post("/compress", upload.single("pdf"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        error: "No PDF file uploaded",
-      })
-    }
-
-    const { targetSize = "150" } = req.body
-    const inputPath = req.file.path
-    const outputPath = `${inputPath}_compressed.pdf`
-
-    console.log(`[API] Starting ultra-aggressive compression for ${req.file.originalname}, target: ${targetSize}KB`)
-
-    // Get original file size
-    const originalStats = fs.statSync(inputPath)
-    const originalSize = originalStats.size
-
-    const performIterativeCompression = async (currentInput, target) => {
-      const maxIterations = target <= 50 ? 4 : target <= 100 ? 3 : target <= 150 ? 2 : 1
-      let currentInputPath = currentInput
-
-      for (let i = 0; i < maxIterations; i++) {
-        const iterationOutput = i === maxIterations - 1 ? outputPath : `${inputPath}_temp_${i}.pdf`
-
-        await new Promise((resolve, reject) => {
-          compressPDF(currentInputPath, iterationOutput, target, (error) => {
-            if (error) return reject(error)
-
-            // Update input for next iteration
-            if (i < maxIterations - 1) {
-              currentInputPath = iterationOutput
-            }
-            resolve()
-          })
-        })
-
-        if (fs.existsSync(iterationOutput)) {
-          const iterationStats = fs.statSync(iterationOutput)
-          console.log(`[API] Iteration ${i + 1}/${maxIterations}: ${iterationStats.size} bytes`)
-        }
-      }
-    }
-
-    try {
-      await performIterativeCompression(inputPath, targetSize)
-    } catch (compressionError) {
-      // Cleanup
-      fs.unlink(inputPath, () => {})
-      return res.status(500).json({
-        success: false,
-        error: "PDF compression failed",
-        details: compressionError.message,
-      })
-    }
-
-    // Get compressed file size
-    const compressedStats = fs.statSync(outputPath)
-    const compressedSize = compressedStats.size
-    const compressionRatio = (((originalSize - compressedSize) / originalSize) * 100).toFixed(2)
-
-    console.log(
-      `[API] Ultra-aggressive compression complete: ${originalSize} -> ${compressedSize} bytes (${compressionRatio}%)`,
-    )
-
-    // Read compressed file
-    const compressedData = fs.readFileSync(outputPath)
-
-    // Cleanup files
-    fs.unlink(inputPath, () => {})
-    fs.unlink(outputPath, () => {})
-
-    // Cleanup any temporary files
-    for (let i = 0; i < 4; i++) {
-      const tempFile = `${inputPath}_temp_${i}.pdf`
-      if (fs.existsSync(tempFile)) {
-        fs.unlink(tempFile, () => {})
-      }
-    }
-
-    res.json({
-      success: true,
-      data: {
-        original_size: originalSize,
-        compressed_size: compressedSize,
-        compression_ratio: Number.parseFloat(compressionRatio),
-        file_data: compressedData.toString("base64"),
-        compression_method:
-          compressionRatio > 70
-            ? "Ultra-Aggressive Multi-Pass Ghostscript"
-            : compressionRatio > 50
-              ? "Aggressive Multi-Pass Ghostscript"
-              : "Standard Ghostscript Compression",
-        iterations_used: targetSize <= 50 ? 4 : targetSize <= 100 ? 3 : targetSize <= 150 ? 2 : 1,
-      },
-    })
-  } catch (error) {
-    console.error(`[API] Error: ${error.message}`)
-
-    // Cleanup on error
-    if (req.file) {
-      fs.unlink(req.file.path, () => {})
-    }
-
-    res.status(500).json({
-      success: false,
-      error: "Internal server error",
-      details: error.message,
-    })
-  }
-})
-
-// Error handling middleware
 app.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {
     if (error.code === "LIMIT_FILE_SIZE") {
-      return res.status(400).json({
-        success: false,
-        error: "File too large. Maximum size is 50MB.",
-      })
+      return res.status(400).json({ error: "File too large. Maximum size is 50MB." })
     }
   }
 
-  res.status(500).json({
-    success: false,
-    error: error.message,
-  })
+  console.error("[API] Error:", error)
+  res.status(500).json({ error: "Internal server error" })
 })
 
-// Start server
+// Start the server
 app.listen(PORT, () => {
-  console.log(`[API] PDF Compression API running on port ${PORT}`)
-  console.log(`[API] Health check: http://localhost:${PORT}/health`)
+  console.log(`Server is running on port ${PORT}`)
 })
